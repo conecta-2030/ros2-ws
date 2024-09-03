@@ -59,18 +59,14 @@ class LidarObjectDetectorNode(Node):
     def lidar_point_cloud_callback(self, lidar_msg: PointCloud2):
         
         points = pc2.read_points(lidar_msg, field_names=("x", "y", "z", "intensity"), skip_nans=True)
-        dtypes = np.dtype([('x', np.float32), ('y', np.float32), ('z', np.float32), ('intensity', np.float32)])
-        point_cloud_numpy = np.array(list(points), dtype=dtypes)
-        point_cloud_numpy = np.stack([point_cloud_numpy['x'],
-            point_cloud_numpy['y'],
-            point_cloud_numpy['z'],
-            point_cloud_numpy['intensity']], axis=-1)
-        point_cloud_tensor = torch.from_numpy(point_cloud_numpy).to(self.device)
-
-        cloud_array = np.array(point_cloud_numpy).flatten()
-        cloud_array[3::4] /= 255
-        cloud_array.astype('float32').tofile('test.bin')
-
+        x = points['x'].reshape(-1)
+        y = (points['y']).reshape(-1)
+        z = (points['z']).reshape(-1)
+        i = (points['intensity'] / 255.0).reshape(-1)
+        pc_np = np.stack((x, y, z, i)).T
+        point_cloud_tensor = torch.from_numpy(pc_np).to(self.device)
+        point_cloud_tensor = point_cloud_tensor.contiguous()
+        
         # inference
         with torch.no_grad():
             results = self.model(batched_pts=[point_cloud_tensor])[0]
@@ -88,6 +84,9 @@ class LidarObjectDetectorNode(Node):
 
         detection_array = Object3dArray()
         for bbox, label, confidence_score in zip(bboxes, labels, confidence_scores):
+            print(confidence_score)
+            # threshold
+            if confidence_score < 0.2: return
             detection = Object3d()
             detection.label = int(label)
             detection.confidence_score = float(confidence_score)
