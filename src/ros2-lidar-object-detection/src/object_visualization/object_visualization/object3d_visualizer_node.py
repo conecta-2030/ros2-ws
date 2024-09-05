@@ -5,6 +5,8 @@ from vision_msgs.msg import Detection3DArray
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.duration import Duration
 from geometry_msgs.msg import Point
+from tf_transformations import quaternion_matrix
+import numpy as np
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
@@ -57,37 +59,46 @@ class Object3dVisualizerNode(Node):
             pose = det3d.bbox.center
             size = det3d.bbox.size
             
+            # Compute the rotation matrix from the quaternion
+            quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+            rotation_matrix = quaternion_matrix(quat)[:3, :3]
+            
             # Compute the 8 corners of the bounding box
-            corners = [
-                [pose.position.x - size.x / 2, pose.position.y - size.y / 2, pose.position.z - size.z / 2],
-                [pose.position.x + size.x / 2, pose.position.y - size.y / 2, pose.position.z - size.z / 2],
-                [pose.position.x + size.x / 2, pose.position.y + size.y / 2, pose.position.z - size.z / 2],
-                [pose.position.x - size.x / 2, pose.position.y + size.y / 2, pose.position.z - size.z / 2],
-                [pose.position.x - size.x / 2, pose.position.y - size.y / 2, pose.position.z + size.z / 2],
-                [pose.position.x + size.x / 2, pose.position.y - size.y / 2, pose.position.z + size.z / 2],
-                [pose.position.x + size.x / 2, pose.position.y + size.y / 2, pose.position.z + size.z / 2],
-                [pose.position.x - size.x / 2, pose.position.y + size.y / 2, pose.position.z + size.z / 2],
-            ]
+            half_size = np.array([size.x / 2, size.y / 2, size.z / 2])
+            corner_offsets = np.array([
+                [-half_size[0], -half_size[1], -half_size[2]],
+                [half_size[0], -half_size[1], -half_size[2]],
+                [half_size[0], half_size[1], -half_size[2]],
+                [-half_size[0], half_size[1], -half_size[2]],
+                [-half_size[0], -half_size[1], half_size[2]],
+                [half_size[0], -half_size[1], half_size[2]],
+                [half_size[0], half_size[1], half_size[2]],
+                [-half_size[0], half_size[1], half_size[2]]
+            ])
+            
+            rotated_corners = (rotation_matrix @ corner_offsets.T).T + np.array([
+                pose.position.x, pose.position.y, pose.position.z
+            ])
             
             # Add lines to marker.points to create the bounding box
             # Connect corners (0-1, 1-2, 2-3, 3-0) - bottom face
             for i in range(4):
-                src = Point(x=corners[i][0], y=corners[i][1], z=corners[i][2])
-                dst = Point(x=corners[(i + 1) % 4][0], y=corners[(i + 1) % 4][1], z=corners[(i + 1) % 4][2])
+                src = Point(x=rotated_corners[i][0], y=rotated_corners[i][1], z=rotated_corners[i][2])
+                dst = Point(x=rotated_corners[(i + 1) % 4][0], y=rotated_corners[(i + 1) % 4][1], z=rotated_corners[(i + 1) % 4][2])
                 marker.points.append(src)
                 marker.points.append(dst)
             
             # Connect corners (4-5, 5-6, 6-7, 7-4) - top face
             for i in range(4, 8):
-                src = Point(x=corners[i][0], y=corners[i][1], z=corners[i][2])
-                dst = Point(x=corners[(i + 1) % 4 + 4][0], y=corners[(i + 1) % 4 + 4][1], z=corners[(i + 1) % 4 + 4][2])
+                src = Point(x=rotated_corners[i][0], y=rotated_corners[i][1], z=rotated_corners[i][2])
+                dst = Point(x=rotated_corners[(i + 1) % 4 + 4][0], y=rotated_corners[(i + 1) % 4 + 4][1], z=rotated_corners[(i + 1) % 4 + 4][2])
                 marker.points.append(src)
                 marker.points.append(dst)
             
             # Connect vertical lines (0-4, 1-5, 2-6, 3-7)
             for i in range(4):
-                src = Point(x=corners[i][0], y=corners[i][1], z=corners[i][2])
-                dst = Point(x=corners[i + 4][0], y=corners[i + 4][1], z=corners[i + 4][2])
+                src = Point(x=rotated_corners[i][0], y=rotated_corners[i][1], z=rotated_corners[i][2])
+                dst = Point(x=rotated_corners[i + 4][0], y=rotated_corners[i + 4][1], z=rotated_corners[i + 4][2])
                 marker.points.append(src)
                 marker.points.append(dst)
 
