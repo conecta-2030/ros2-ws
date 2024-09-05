@@ -10,9 +10,9 @@ import numpy as np
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
-    0: [1.0, 0.0, 0.0],     # Pedestrian
-    1: [0.0, 1.0, 0.0],     # Cyclist
-    2: [0.0, 0.0, 1.0]      # Car        
+    7: [1.0, 0.0, 0.0],     # Pedestrian
+    5: [0.0, 1.0, 0.0],     # Cyclist
+    0: [0.0, 0.0, 1.0]      # Car
 }
 
 class Object3dVisualizerNode(Node):
@@ -47,13 +47,11 @@ class Object3dVisualizerNode(Node):
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.id = marker.header.stamp.nanosec  # Replace with a unique id if available
             marker.type = 5  # LINE_LIST type
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
+            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].hypothesis.class_id)]
             marker.color.a = 1.0
             marker.scale.x = 0.1  # Line width
             marker.lifetime = Duration(seconds=5.0).to_msg()
-            marker.ns = "detection_visualization"
+            marker.ns = "object_visualization"
 
             # Extract pose and dimensions
             pose = det3d.bbox.center

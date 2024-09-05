@@ -51,8 +51,8 @@ class InferNode(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time)
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.declare_parameter('config_file', 'pointpillars_hv_secfpn_8xb6-160e_kitti-3d-car.py')
-        self.declare_parameter('checkpoint_file', 'hv_pointpillars_secfpn_6x8_160e_kitti-3d-car_20220331_134606-d42d15ed.pth')
+        self.declare_parameter('config_file', '')
+        self.declare_parameter('checkpoint_file', '')
         self.declare_parameter('point_cloud_frame', 'map')
         self.declare_parameter('point_cloud_topic', 'velodyne_points')
         self.declare_parameter('score_threshold', 0.98)
@@ -101,7 +101,16 @@ class InferNode(Node):
         #            'garbagebin')
         # else:
         #     self.logger.error('Unknown weight, path of weight should contain "sunrgbd" or "scannet"')
-        self.class_names = ('Car')
+        self.class_names = ('car',
+            'truck',
+            'trailer',
+            'bus',
+            'construction_vehicle',
+            'bicycle',
+            'motorcycle',
+            'pedestrian',
+            'traffic_cone',
+            'barrier',)
 
         self.get_logger().info('full_config_file: "%s"' % config_file_path)
         self.get_logger().info('checkpoint_file: "%s"' % checkpoint_file_path)
@@ -119,7 +128,7 @@ class InferNode(Node):
         self.timer = self.create_timer(nms_interval, self.detections_callback)
 
         self.filtered_bboxes_nms = torch.zeros(0, 6).cuda()
-        self.filtered_bboxes_tensor = torch.zeros(0, 7).cuda()
+        self.filtered_bboxes_tensor = torch.zeros(0, 9).cuda() # 7 to kitti and 9 to nuscenes
         self.filtered_scores = torch.zeros(0).cuda()
         self.filtered_labels = torch.zeros(0).cuda()
 
@@ -154,14 +163,15 @@ class InferNode(Node):
         #     # Fill the array
         #     color_points[ind] = [base_pt.x, base_pt.y, base_pt.z, r, g, b]
 
-        points = pc2.read_points(msg, field_names=("x", "y", "z", "intensity"), skip_nans=True)
+        points = pc2.read_points(msg, field_names=("x", "y", "z", "intensity", "ring"), skip_nans=True) # nuscenes trains with all kitti removes ring
         x = points['x'].reshape(-1)
         y = (points['y']).reshape(-1)
         z = (points['z']).reshape(-1)
         i = (points['intensity'] / 255.0).reshape(-1)
-        pc_np = np.stack((x, y, z, i)).T
+        ring = (points['ring'] / 255.0).reshape(-1)
+        pc_np = np.stack((x, y, z, i, ring)).T
         point_cloud_tensor = torch.from_numpy(pc_np)
-        point_cloud_tensor = point_cloud_tensor
+        point_cloud_tensor = point_cloud_tensor.contiguous()
 
         #     base_points[ind] = [base_pt.x, base_pt.y, base_pt.z]
         
@@ -215,7 +225,7 @@ class InferNode(Node):
             for ind in range(len(bboxes)):
                 bbox = bboxes[ind]
                 label = int(labels[ind])
-                if label in [4,9]:
+                if label in [1,2,3,4,6,8,9]: # skip unwanted labels
                     continue
                 score = scores[ind]
                 det3d = Detection3D()
@@ -242,7 +252,7 @@ class InferNode(Node):
                 det3d.bbox.center = pose
                 det3d.bbox.size = dimensions
                 object_hypothesis = ObjectHypothesisWithPose()
-                object_hypothesis.hypothesis.class_id = self.class_names[label]
+                object_hypothesis.hypothesis.class_id = str(label)
                 object_hypothesis.hypothesis.score = score.item()
                 det3d.results.append(object_hypothesis)
                 
