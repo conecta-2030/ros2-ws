@@ -14,8 +14,8 @@ import sensor_msgs_py.point_cloud2 as pc2
 
 CLASSES = {
     'Pedestrian': 0, 
-    'Cyclist': 1, 
-    'Car': 2        
+    'Cyclist': 1,
+    'Car': 2   
 }
 
 
@@ -84,9 +84,9 @@ class LidarObjectDetectorNode(Node):
 
         detection_array = Object3dArray()
         for bbox, label, confidence_score in zip(bboxes, labels, confidence_scores):
-            print(confidence_score)
+
             # threshold
-            if confidence_score < 0.2: return
+            if confidence_score < 0.17: return
             detection = Object3d()
             detection.label = int(label)
             detection.confidence_score = float(confidence_score)

@@ -51,23 +51,17 @@ class InferNode(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time)
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.declare_parameter('config_file', '')
-        self.declare_parameter('checkpoint_file', '')
+        self.declare_parameter('config_file', '/path/to/py')
+        self.declare_parameter('checkpoint_file', 'path/to/pth')
         self.declare_parameter('point_cloud_frame', 'map')
         self.declare_parameter('point_cloud_topic', 'velodyne_points')
         self.declare_parameter('score_threshold', 0.98)
         self.declare_parameter('infer_device', 'cuda:0')
         self.declare_parameter('nms_interval', 0.5)
         self.declare_parameter('point_cloud_qos', 'best_effort')
-        # votenet
-        # self.declare_parameter('config_file', 'configs/votenet/votenet_8xb16_sunrgbd-3d.py')
-        # self.declare_parameter('checkpoint_file', '../checkpoints/votenet_16x8_sunrgbd-3d-10class_20210820_162823-bf11f014.pth')
-        # imvoxelnet
-        # self.declare_parameter('config_file', 'configs/imvoxelnet/imvoxelnet_2xb4_sunrgbd-3d-10class.py')
-        # self.declare_parameter('checkpoint_file', '../checkpoints/imvoxelnet_4x2_sunrgbd-3d-10class_20220809_184416-29ca7d2e.pth')
 
         config_file_path = self.get_parameter('config_file').get_parameter_value().string_value
-        checkpoint_file_path = self.get_parameter('checkpoint_file').get_parameter_value().string_value
+        self.checkpoint_file_path = self.get_parameter('checkpoint_file').get_parameter_value().string_value
         infer_device = self.get_parameter('infer_device').get_parameter_value().string_value
         self.score_thrs = self.get_parameter('score_threshold').get_parameter_value().double_value
         nms_interval = self.get_parameter('nms_interval').get_parameter_value().double_value
@@ -89,97 +83,66 @@ class InferNode(Node):
         self.det3d_array = Detection3DArray()
         self.det3d_array.header.frame_id = 'map'
 
-        # if 'sunrgbd' in checkpoint_file_path:
-        #     self.get_logger().info('aaaa')
-        #     self.class_names = ('bed', 'table', 'sofa', 'chair', 'toilet', 'desk', 'dresser',
-        #            'night_stand', 'bookshelf', 'bathtub')
-        # elif 'scannet' in checkpoint_file_path:
-        #     self.get_logger().info('xxxxx')
-        #     self.class_names = ('cabinet', 'bed', 'chair', 'sofa', 'table', 'door', 'window',
-        #            'bookshelf', 'picture', 'counter', 'desk', 'curtain',
-        #            'refrigerator', 'showercurtrain', 'toilet', 'sink', 'bathtub',
-        #            'garbagebin')
-        # else:
-        #     self.logger.error('Unknown weight, path of weight should contain "sunrgbd" or "scannet"')
-        self.class_names = ('car',
-            'truck',
-            'trailer',
-            'bus',
-            'construction_vehicle',
-            'bicycle',
-            'motorcycle',
-            'pedestrian',
-            'traffic_cone',
-            'barrier',)
+        if 'kitti' in self.checkpoint_file_path:
+            self.logger.info("Running with Kitti")
+
+            self.filtered_bboxes_tensor = torch.zeros(0, 7).cuda()
+            self.field_names = ("x", "y", "z", "intensity")
+        elif 'nus' in self.checkpoint_file_path:
+            self.logger.info("Running with Nuscenes")
+            
+            self.filtered_bboxes_tensor = torch.zeros(0, 9).cuda()
+            self.field_names = ("x", "y", "z", "intensity", "ring")
+        else:
+            self.logger.error('Unknown weight, path of weight should contain "kitti" or "nus"')
+
+        self.label_mapping = {
+            7: 0,
+            5: 1
+        }
 
         self.get_logger().info('full_config_file: "%s"' % config_file_path)
-        self.get_logger().info('checkpoint_file: "%s"' % checkpoint_file_path)
-        self.model = init_model(config_file_path, checkpoint_file_path, device=self.device)
+        self.get_logger().info('checkpoint_file: "%s"' % self.checkpoint_file_path)
+        self.model = init_model(config_file_path, self.checkpoint_file_path, device=self.device)
 
         self.subscription = self.create_subscription(
             PointCloud2,
             point_cloud_topic,
             self.listener_callback,
             qos)
+        
         self.marker_pub = self.create_publisher(Detection3DArray, 'detect_bbox3d', 10)
-        # for debug
-        # self.publisher_ = self.create_publisher(PointCloud2, '/detect_bbox_infer_pcd', qos)
-        # for nms and publish
+        
         self.timer = self.create_timer(nms_interval, self.detections_callback)
 
         self.filtered_bboxes_nms = torch.zeros(0, 6).cuda()
-        self.filtered_bboxes_tensor = torch.zeros(0, 9).cuda() # 7 to kitti and 9 to nuscenes
         self.filtered_scores = torch.zeros(0).cuda()
         self.filtered_labels = torch.zeros(0).cuda()
 
 
     def listener_callback(self, msg):
-        # # convert pointcloud2 to points with color (xyzrgb)
-        # gen = pc2.read_points(msg, skip_nans=True)
-        # int_data = list(gen)
-        # # Initialize an array with the correct size        
-        # color_points = np.zeros((len(int_data), 6))
-        # # points 是相机坐标系下的
-        # points = np.zeros((len(int_data), 3))
-        # # base points 是odom 坐标系下的
-        # base_points = np.zeros((len(int_data), 3))
-        # try:
-        #     transform_stamped = self.tf_buffer.lookup_transform('velodyne', self.point_cloud_frame, msg.header.stamp)
-        # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-        #     self.get_logger().error('Failed to lookup transform')
-        #     return
-        # for ind, x in enumerate(int_data):
-        #     test = x[3] 
-        #     points[ind] = [x[0], x[1], x[2]]
-        #     pt = Point()
-        #     pt.x, pt.y, pt.z = float(x[0]), float(x[1]), float(x[2])
-        #     base_pt = transform_point(transform_stamped, pt)
-        #     s = struct.pack('>f' ,test)
-        #     i = struct.unpack('>l',s)[0]
-        #     pack = ctypes.c_uint32(i).value
-        #     r = ((pack & 0x00FF0000)>> 16) /255
-        #     g = ((pack & 0x0000FF00)>> 8) /255
-        #     b = (pack & 0x000000FF) / 255
-        #     # Fill the array
-        #     color_points[ind] = [base_pt.x, base_pt.y, base_pt.z, r, g, b]
 
-        points = pc2.read_points(msg, field_names=("x", "y", "z", "intensity", "ring"), skip_nans=True) # nuscenes trains with all kitti removes ring
+        points = pc2.read_points(msg, field_names=self.field_names, skip_nans=True)
         x = points['x'].reshape(-1)
-        y = (points['y']).reshape(-1)
-        z = (points['z']).reshape(-1)
+        y = points['y'].reshape(-1)
+        z = points['z'].reshape(-1)
         i = (points['intensity'] / 255.0).reshape(-1)
-        ring = (points['ring'] / 255.0).reshape(-1)
-        pc_np = np.stack((x, y, z, i, ring)).T
+
+        if 'kitti' in self.checkpoint_file_path:
+            pc_np = np.stack((x, y, z, i)).T
+        elif 'nus' in self.checkpoint_file_path:
+            ring = points['ring'].reshape(-1)
+            pc_np = np.stack((x, y, z, i, ring)).T
+        else:
+            self.logger.error('Unknown weight, path of weight should contain "kitti" or "nus"')
+
         point_cloud_tensor = torch.from_numpy(pc_np)
         point_cloud_tensor = point_cloud_tensor.contiguous()
 
-        #     base_points[ind] = [base_pt.x, base_pt.y, base_pt.z]
-        
-        # infer_points = pc2.create_cloud_xyz32(header=msg.header, points=base_points)
-        # self.publisher_.publish(infer_points)
         start_time = time.time()  # get current time
-        # for sunrgbd
+
         model_result, data_afterprocess = inference_detector(self.model, point_cloud_tensor)
+        
         end_time = time.time()  # get current time after inference
         # Calculate elapsed time in milliseconds
         elapsed_time_ms = (end_time - start_time) * 1000
@@ -225,8 +188,11 @@ class InferNode(Node):
             for ind in range(len(bboxes)):
                 bbox = bboxes[ind]
                 label = int(labels[ind])
-                if label in [1,2,3,4,6,8,9]: # skip unwanted labels
-                    continue
+                self.logger.info("[NMS] label {}".format(label))
+                if 'nus' in self.checkpoint_file_path:
+                    # if label in [1,2,3,4,6,8,9]: # skip unwanted labels (nuscenes case)
+                    #     continue
+                    label = self.label_mapping.get(label, 2)
                 score = scores[ind]
                 det3d = Detection3D()
                 det3d.header.frame_id = 'map'
@@ -258,8 +224,8 @@ class InferNode(Node):
                 
                 det3d_array.detections.append(det3d)
                 
-                self.logger.debug(f"Found class_id: {self.class_names[label]}, score: {score.item()}")
-        
+                self.logger.debug(f"Found class_id: {label}, score: {score.item()}")
+
             self.marker_pub.publish(det3d_array)
         
 def main(args=None):

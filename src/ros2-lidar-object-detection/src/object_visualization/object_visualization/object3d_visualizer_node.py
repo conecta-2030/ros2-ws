@@ -10,9 +10,9 @@ import numpy as np
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
-    7: [1.0, 0.0, 0.0],     # Pedestrian
-    5: [0.0, 1.0, 0.0],     # Cyclist
-    0: [0.0, 0.0, 1.0]      # Car
+    0: [1.0, 0.0, 0.0],     # Pedestrian
+    1: [0.0, 1.0, 0.0],     # Cyclist
+    2: [0.0, 0.0, 1.0]      # Car
 }
 
 class Object3dVisualizerNode(Node):
@@ -27,8 +27,6 @@ class Object3dVisualizerNode(Node):
             qos_profile = 1
         )
 
-        self.visualization_publisher = self.create_publisher(MarkerArray, 'object_detection_visualization', 10)
-
         # self.subscription = self.create_subscription(
         #     msg_type = Object3dArray,
         #     topic = 'object_detections_3d',
@@ -36,7 +34,7 @@ class Object3dVisualizerNode(Node):
         #     qos_profile = 1
         # )
 
-        # self.visualization_publisher = self.create_publisher(MarkerArray, 'object_detection_visualization', 10)
+        self.visualization_publisher = self.create_publisher(MarkerArray, 'object_detection_visualization', 10)
 
     def visualize_detection3d(self, msg: Detection3DArray):
         
@@ -46,10 +44,10 @@ class Object3dVisualizerNode(Node):
             marker.header.frame_id = msg.header.frame_id
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.id = marker.header.stamp.nanosec  # Replace with a unique id if available
-            marker.type = 5  # LINE_LIST type
+            marker.type = 5
             marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].hypothesis.class_id)]
             marker.color.a = 1.0
-            marker.scale.x = 0.1  # Line width
+            marker.scale.x = 0.1
             marker.lifetime = Duration(seconds=5.0).to_msg()
             marker.ns = "object_visualization"
 
@@ -101,25 +99,44 @@ class Object3dVisualizerNode(Node):
                 marker.points.append(dst)
 
             marker_array.markers.append(marker)
+
+            # Create marker for score
+            score_marker = Marker()
+            score_marker.header.frame_id = msg.header.frame_id
+            score_marker.header.stamp = self.get_clock().now().to_msg()
+            score_marker.id = marker.header.stamp.nanosec + 1
+            score_marker.type = Marker.TEXT_VIEW_FACING
+            score_marker.color.r, score_marker.color.g, score_marker.color.b = [1.0, 1.0, 1.0]
+            score_marker.color.a = 1.0
+            score_marker.scale.z = 0.5
+            score_marker.lifetime = Duration(seconds=5.0).to_msg()
+            score_marker.ns = "object_visualization"
+
+            score_marker.pose.position = Point(x=pose.position.x, y=pose.position.y, z=pose.position.z + size.z / 2 + 0.5)
+            score_marker.pose.orientation.w = 1.0
+            
+            score = det3d.results[0].hypothesis.score
+            score_marker.text = f"{score:.2f}"
+
+            marker_array.markers.append(score_marker)
         
         self.visualization_publisher.publish(marker_array)
 
 
     def visual_objects3d(self, msg: Object3dArray):
-        #self.get_logger().info(f"{msg.header}")
-        
+
         marker_array = MarkerArray()
         for object in msg.objects:
             
             marker = Marker()
             marker.header.frame_id = msg.header.frame_id
             marker.header.stamp = self.get_clock().now().to_msg()
-            marker.id = marker.header.stamp.nanosec # should be replaced with object.id
+            marker.id = marker.header.stamp.nanosec
             marker.type = 5
             marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[object.label]
             marker.color.a = 1.0
             marker.scale.x = 0.10
-            marker.lifetime = Duration(seconds=5.0).to_msg()    # should be removed when object.id exists
+            marker.lifetime = Duration(seconds=5.0).to_msg()
             marker.ns = "object_visualization"
 
             for i in range(4):
