@@ -10,9 +10,9 @@ import numpy as np
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
-    0: [1.0, 0.0, 0.0],     # Pedestrian
-    1: [0.0, 1.0, 0.0],     # Cyclist
-    2: [0.0, 0.0, 1.0]      # Car
+    7: [1.0, 0.0, 0.0],     # Pedestrian
+    5: [0.0, 1.0, 0.0],     # Cyclist
+    0: [0.0, 0.0, 1.0]      # Car
 }
 
 class Object3dVisualizerNode(Node):

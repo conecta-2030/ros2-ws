@@ -53,9 +53,8 @@ class InferNode(Node):
 
         self.declare_parameter('config_file', '/path/to/py')
         self.declare_parameter('checkpoint_file', 'path/to/pth')
-        self.declare_parameter('point_cloud_frame', 'map')
+        self.declare_parameter('point_cloud_frame', 'velodyne')
         self.declare_parameter('point_cloud_topic', 'velodyne_points')
-        self.declare_parameter('score_threshold', 0.98)
         self.declare_parameter('infer_device', 'cuda:0')
         self.declare_parameter('nms_interval', 0.5)
         self.declare_parameter('point_cloud_qos', 'best_effort')
@@ -63,11 +62,12 @@ class InferNode(Node):
         config_file_path = self.get_parameter('config_file').get_parameter_value().string_value
         self.checkpoint_file_path = self.get_parameter('checkpoint_file').get_parameter_value().string_value
         infer_device = self.get_parameter('infer_device').get_parameter_value().string_value
-        self.score_thrs = self.get_parameter('score_threshold').get_parameter_value().double_value
         nms_interval = self.get_parameter('nms_interval').get_parameter_value().double_value
         self.point_cloud_frame = self.get_parameter('point_cloud_frame').get_parameter_value().string_value
         point_cloud_qos = self.get_parameter('point_cloud_qos').get_parameter_value().string_value
         point_cloud_topic = self.get_parameter('point_cloud_topic').get_parameter_value().string_value
+
+        self.score_thrs = {0: 0.50, 7: 0.1}
 
         qos = QoSProfile(depth=5)
         if point_cloud_qos == 'best_effort':
@@ -81,7 +81,7 @@ class InferNode(Node):
         self.device = device
         self.transform_stamped = TransformStamped()
         self.det3d_array = Detection3DArray()
-        self.det3d_array.header.frame_id = 'map'
+        self.det3d_array.header.frame_id = self.point_cloud_frame
 
         if 'kitti' in self.checkpoint_file_path:
             self.logger.info("Running with Kitti")
@@ -95,11 +95,6 @@ class InferNode(Node):
             self.field_names = ("x", "y", "z", "intensity", "ring")
         else:
             self.logger.error('Unknown weight, path of weight should contain "kitti" or "nus"')
-
-        self.label_mapping = {
-            7: 0,
-            5: 1
-        }
 
         self.get_logger().info('full_config_file: "%s"' % config_file_path)
         self.get_logger().info('checkpoint_file: "%s"' % self.checkpoint_file_path)
@@ -151,11 +146,13 @@ class InferNode(Node):
         bboxes = model_result.pred_instances_3d.bboxes_3d
         scores = model_result.pred_instances_3d.scores_3d
         labels = model_result.pred_instances_3d.labels_3d
-        indices = torch.where(scores > self.score_thrs)
-        # x_center, y_center, z_center, dx, dy, dz, yaw
-        filtered_bboxes = bboxes[indices]
-        filtered_scores = scores[indices]
-        filtered_labels = labels[indices]
+        
+        masks = [scores > self.score_thrs.get(label, 0.7) for label in labels.unique()]
+        mask = torch.stack(masks).any(dim=0)
+
+        filtered_bboxes = bboxes[mask]
+        filtered_scores = scores[mask]
+        filtered_labels = labels[mask]
         
         if filtered_bboxes.shape[0] != 0:
             filtered_bboxes_x0 = filtered_bboxes.center[:,0]-0.5*filtered_bboxes.dims[:,0]
@@ -183,19 +180,14 @@ class InferNode(Node):
     
     def draw_bbox(self, bboxes, labels, scores, timestamp=None):
         det3d_array = Detection3DArray()
-        det3d_array.header.frame_id = 'map'
+        det3d_array.header.frame_id = self.point_cloud_frame
         if len(bboxes) > 0:
             for ind in range(len(bboxes)):
                 bbox = bboxes[ind]
-                label = int(labels[ind])
-                self.logger.info("[NMS] label {}".format(label))
-                if 'nus' in self.checkpoint_file_path:
-                    # if label in [1,2,3,4,6,8,9]: # skip unwanted labels (nuscenes case)
-                    #     continue
-                    label = self.label_mapping.get(label, 2)
                 score = scores[ind]
+                label = int(labels[ind])
                 det3d = Detection3D()
-                det3d.header.frame_id = 'map'
+                det3d.header.frame_id = self.point_cloud_frame
 
                 pose = Pose()
                 pose.position.x = bbox[0].item()
@@ -203,7 +195,12 @@ class InferNode(Node):
                 pose.position.z = bbox[2].item()
 
                 quat = Quaternion()
-                q = tf_transformations.quaternion_from_euler(0, 0, bbox[-1].item())
+                if 'nus' in self.checkpoint_file_path:
+                    if label in [1,3,4,6,8,9]: # skip unwanted labels (nuscenes case)
+                        continue
+                    q = tf_transformations.quaternion_from_euler(0, 0, bbox[6].item())
+                else:
+                    q = tf_transformations.quaternion_from_euler(0, 0, bbox[-1].item())
                 quat.x = q[0]
                 quat.y = q[1]
                 quat.z = q[2]
