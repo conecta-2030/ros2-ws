@@ -1,0 +1,4 @@
+pynose
+numpy<2
+lark; platform_system == "Linux"
+empy==3.3.4
