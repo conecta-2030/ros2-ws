@@ -1,27 +1,18 @@
-import os
-import ctypes
-import struct
 import time
-
 import numpy as np
 import torch
-import mmcv
-
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.qos import ReliabilityPolicy, QoSProfile
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
-from geometry_msgs.msg import Point, Pose, Quaternion, Vector3, TransformStamped
+from geometry_msgs.msg import Point, Pose, Quaternion, Vector3
 from vision_msgs.msg import Detection3DArray, Detection3D, ObjectHypothesisWithPose
 import tf2_ros
-from object_detection_msgs.msg import Object3d, Object3dArray
 import tf_transformations
-
 from mmdet3d.apis import inference_detector, init_model
 from mmdet3d.models.layers import aligned_3d_nms
-from mmdet3d.structures import DepthInstance3DBoxes
 
 def transform_point(trans, pt):
     # https://answers.ros.org/question/249433/tf2_ros-buffer-transform-pointstamped/
@@ -55,19 +46,22 @@ class InferNode(Node):
         self.declare_parameter('checkpoint_file', 'path/to/pth')
         self.declare_parameter('point_cloud_frame', 'velodyne')
         self.declare_parameter('point_cloud_topic', 'velodyne_points')
-        self.declare_parameter('infer_device', 'cuda:0')
         self.declare_parameter('nms_interval', 0.5)
         self.declare_parameter('point_cloud_qos', 'best_effort')
 
         config_file_path = self.get_parameter('config_file').get_parameter_value().string_value
         self.checkpoint_file_path = self.get_parameter('checkpoint_file').get_parameter_value().string_value
-        infer_device = self.get_parameter('infer_device').get_parameter_value().string_value
         nms_interval = self.get_parameter('nms_interval').get_parameter_value().double_value
         self.point_cloud_frame = self.get_parameter('point_cloud_frame').get_parameter_value().string_value
         point_cloud_qos = self.get_parameter('point_cloud_qos').get_parameter_value().string_value
         point_cloud_topic = self.get_parameter('point_cloud_topic').get_parameter_value().string_value
 
-        self.score_thrs = {0: 0.50, 7: 0.1}
+        self.score_thrs = {0: 0.55, 5: 0.2, 7: 0.32}
+        self.nus_label_to_kitti = {
+            0: 7,
+            1: 5,
+            2: 0
+        }
 
         qos = QoSProfile(depth=5)
         if point_cloud_qos == 'best_effort':
@@ -79,9 +73,6 @@ class InferNode(Node):
             return
 
         self.device = device
-        self.transform_stamped = TransformStamped()
-        self.det3d_array = Detection3DArray()
-        self.det3d_array.header.frame_id = self.point_cloud_frame
 
         if 'kitti' in self.checkpoint_file_path:
             self.logger.info("Running with Kitti")
@@ -147,27 +138,20 @@ class InferNode(Node):
         scores = model_result.pred_instances_3d.scores_3d
         labels = model_result.pred_instances_3d.labels_3d
         
-        masks = [scores > self.score_thrs.get(label, 0.7) for label in labels.unique()]
-        mask = torch.stack(masks).any(dim=0)
-
-        filtered_bboxes = bboxes[mask]
-        filtered_scores = scores[mask]
-        filtered_labels = labels[mask]
-        
-        if filtered_bboxes.shape[0] != 0:
-            filtered_bboxes_x0 = filtered_bboxes.center[:,0]-0.5*filtered_bboxes.dims[:,0]
-            filtered_bboxes_y0 = filtered_bboxes.center[:,1]-0.5*filtered_bboxes.dims[:,1]
-            filtered_bboxes_z0 = filtered_bboxes.center[:,2]-0.5*filtered_bboxes.dims[:,2]
-            filtered_bboxes_x1 = filtered_bboxes.center[:,0]+0.5*filtered_bboxes.dims[:,0]
-            filtered_bboxes_y1 = filtered_bboxes.center[:,1]+0.5*filtered_bboxes.dims[:,1]
-            filtered_bboxes_z1 = filtered_bboxes.center[:,2]+0.5*filtered_bboxes.dims[:,2]
+        if bboxes.shape[0] != 0:
+            filtered_bboxes_x0 = bboxes.center[:,0]-0.5*bboxes.dims[:,0]
+            filtered_bboxes_y0 = bboxes.center[:,1]-0.5*bboxes.dims[:,1]
+            filtered_bboxes_z0 = bboxes.center[:,2]-0.5*bboxes.dims[:,2]
+            filtered_bboxes_x1 = bboxes.center[:,0]+0.5*bboxes.dims[:,0]
+            filtered_bboxes_y1 = bboxes.center[:,1]+0.5*bboxes.dims[:,1]
+            filtered_bboxes_z1 = bboxes.center[:,2]+0.5*bboxes.dims[:,2]
             filtered_bboxes_nms = torch.stack((filtered_bboxes_x0, filtered_bboxes_y0,
                                                filtered_bboxes_z0, filtered_bboxes_x1,
                                                filtered_bboxes_y1, filtered_bboxes_z1), dim=1)
             self.filtered_bboxes_nms = torch.cat((self.filtered_bboxes_nms, filtered_bboxes_nms), dim=0)
-            self.filtered_bboxes_tensor = torch.cat((self.filtered_bboxes_tensor, filtered_bboxes.tensor), dim=0)
-            self.filtered_scores = torch.cat((self.filtered_scores, filtered_scores), dim=0)
-            self.filtered_labels = torch.cat((self.filtered_labels, filtered_labels), dim=0)
+            self.filtered_bboxes_tensor = torch.cat((self.filtered_bboxes_tensor, bboxes.tensor), dim=0)
+            self.filtered_scores = torch.cat((self.filtered_scores, scores), dim=0)
+            self.filtered_labels = torch.cat((self.filtered_labels, labels), dim=0)
 
     def detections_callback(self):
         pick_ind = aligned_3d_nms(self.filtered_bboxes_nms, self.filtered_scores, self.filtered_labels, 0.25)
@@ -196,11 +180,17 @@ class InferNode(Node):
 
                 quat = Quaternion()
                 if 'nus' in self.checkpoint_file_path:
-                    if label in [1,3,4,6,8,9]: # skip unwanted labels (nuscenes case)
+                    if label in [1,2,3,4,5,6,8,9]: # skip unwanted labels (nuscenes case)
                         continue
                     q = tf_transformations.quaternion_from_euler(0, 0, bbox[6].item())
                 else:
+                    label = self.nus_label_to_kitti.get(label, None)
+                    if label is None: continue
                     q = tf_transformations.quaternion_from_euler(0, 0, bbox[-1].item())
+
+                threshold = self.score_thrs.get(label, None)
+                if threshold is None or score < threshold: continue
+
                 quat.x = q[0]
                 quat.y = q[1]
                 quat.z = q[2]
