@@ -13,6 +13,7 @@ import tf2_ros
 import tf_transformations
 from mmdet3d.apis import inference_detector, init_model
 from mmdet3d.models.layers import aligned_3d_nms
+import json
 
 def transform_point(trans, pt):
     # https://answers.ros.org/question/249433/tf2_ros-buffer-transform-pointstamped/
@@ -56,7 +57,7 @@ class InferNode(Node):
         point_cloud_qos = self.get_parameter('point_cloud_qos').get_parameter_value().string_value
         point_cloud_topic = self.get_parameter('point_cloud_topic').get_parameter_value().string_value
 
-        self.score_thrs = {0: 0.55, 5: 0.2, 7: 0.32}
+        self.score_thrs = {0: 0.45, 5: 1,7: 0.27}
         self.nus_label_to_kitti = {
             0: 7,
             1: 5,
@@ -99,7 +100,7 @@ class InferNode(Node):
         
         self.marker_pub = self.create_publisher(Detection3DArray, 'detect_bbox3d', 10)
         
-        self.timer = self.create_timer(nms_interval, self.detections_callback)
+        #self.timer = self.create_timer(nms_interval, self.detections_callback)
 
         self.filtered_bboxes_nms = torch.zeros(0, 6).cuda()
         self.filtered_scores = torch.zeros(0).cuda()
@@ -109,15 +110,24 @@ class InferNode(Node):
     def listener_callback(self, msg):
 
         points = pc2.read_points(msg, field_names=self.field_names, skip_nans=True)
-        x = points['x'].reshape(-1)
-        y = points['y'].reshape(-1)
-        z = points['z'].reshape(-1)
-        i = (points['intensity'] / 255.0).reshape(-1)
+        points_list = list(points)
+
+        x = np.array([point[0] for point in points_list])
+        y = np.array([point[1] for point in points_list])
+        z = np.array([point[2] for point in points_list])
+        intensity = np.array([point[3] for point in points_list])
+
+        i = (intensity / 255.0).reshape(-1)
+        # x = points['x'].reshape(-1)
+        # y = points['y'].reshape(-1)
+        # z = points['z'].reshape(-1)
+        # i = (points['intensity'] / 255.0).reshape(-1)
 
         if 'kitti' in self.checkpoint_file_path:
             pc_np = np.stack((x, y, z, i)).T
         elif 'nus' in self.checkpoint_file_path:
-            ring = points['ring'].reshape(-1)
+            ring = np.array([point[4] for point in points_list])
+            #ring = points['ring'].reshape(-1)
             pc_np = np.stack((x, y, z, i, ring)).T
         else:
             self.logger.error('Unknown weight, path of weight should contain "kitti" or "nus"')
@@ -153,23 +163,29 @@ class InferNode(Node):
             self.filtered_scores = torch.cat((self.filtered_scores, scores), dim=0)
             self.filtered_labels = torch.cat((self.filtered_labels, labels), dim=0)
 
-    def detections_callback(self):
-        pick_ind = aligned_3d_nms(self.filtered_bboxes_nms, self.filtered_scores, self.filtered_labels, 0.25)
-        self.logger.info("[NMS] detections {} -> {}".format(self.filtered_bboxes_nms.shape[0], pick_ind.shape[0]))
-        self.filtered_bboxes_nms = self.filtered_bboxes_nms[pick_ind]
-        self.filtered_labels = self.filtered_labels[pick_ind]
-        self.filtered_scores = self.filtered_scores[pick_ind]
-        self.filtered_bboxes_tensor = self.filtered_bboxes_tensor[pick_ind]
-        self.draw_bbox(self.filtered_bboxes_tensor.cpu(), self.filtered_labels.cpu().numpy(), self.filtered_scores.cpu().numpy())
+            pick_ind = aligned_3d_nms(self.filtered_bboxes_nms, self.filtered_scores, self.filtered_labels, 0.25)
+            self.logger.info("[NMS] detections {} -> {}".format(self.filtered_bboxes_nms.shape[0], pick_ind.shape[0]))
+            self.filtered_bboxes_nms = self.filtered_bboxes_nms[pick_ind]
+            self.filtered_labels = self.filtered_labels[pick_ind]
+            self.filtered_scores = self.filtered_scores[pick_ind]
+            self.filtered_bboxes_tensor = self.filtered_bboxes_tensor[pick_ind]
+            self.draw_bbox(self.filtered_bboxes_tensor.cpu(), self.filtered_labels.cpu().numpy(), self.filtered_scores.cpu().numpy(), point_cloud_tensor)
     
-    def draw_bbox(self, bboxes, labels, scores, timestamp=None):
+    def draw_bbox(self, bboxes, labels, scores, point_cloud_tensor, timestamp=None):
+
         det3d_array = Detection3DArray()
         det3d_array.header.frame_id = self.point_cloud_frame
         if len(bboxes) > 0:
+            ground_truth_data = []
+            frame_id = time.time()
             for ind in range(len(bboxes)):
                 bbox = bboxes[ind]
                 score = scores[ind]
                 label = int(labels[ind])
+
+                translation = [bbox[0].item(), bbox[1].item(), bbox[2].item()]
+                size = [bbox[3].item(), bbox[4].item(), bbox[5].item()]
+
                 det3d = Detection3D()
                 det3d.header.frame_id = self.point_cloud_frame
 
@@ -180,7 +196,7 @@ class InferNode(Node):
 
                 quat = Quaternion()
                 if 'nus' in self.checkpoint_file_path:
-                    if label in [1,2,3,4,5,6,8,9]: # skip unwanted labels (nuscenes case)
+                    if label in [1,2,3,4,6,8,9]: # skip unwanted labels (nuscenes case)
                         continue
                     q = tf_transformations.quaternion_from_euler(0, 0, bbox[6].item())
                 else:
@@ -190,6 +206,10 @@ class InferNode(Node):
 
                 threshold = self.score_thrs.get(label, None)
                 if threshold is None or score < threshold: continue
+
+                ego_translation = [0, 0, translation[2]]
+                velocity = [0, 0]
+                num_pts = -1
 
                 quat.x = q[0]
                 quat.y = q[1]
@@ -205,13 +225,31 @@ class InferNode(Node):
                 det3d.bbox.center = pose
                 det3d.bbox.size = dimensions
                 object_hypothesis = ObjectHypothesisWithPose()
-                object_hypothesis.hypothesis.class_id = str(label)
-                object_hypothesis.hypothesis.score = score.item()
+                object_hypothesis.id = str(label)
+                object_hypothesis.score = score.item()
                 det3d.results.append(object_hypothesis)
                 
                 det3d_array.detections.append(det3d)
                 
-                self.logger.debug(f"Found class_id: {label}, score: {score.item()}")
+                self.logger.info(f"Found class_id: {label}, score: {score.item()}")
+
+                # gt_entry = {
+                #     "frame_id": frame_id,
+                #     "label": int(label),
+                #     "score": float(score.item()),
+                #     "center": bbox[:3].tolist(),
+                #     "size": bbox[3:6].tolist(),
+                #     "rotation": float(bbox[6]) if len(bbox) > 6 else 0
+                # }
+
+                # ground_truth_data.append(gt_entry)
+
+            # if len(ground_truth_data) > 0:
+                # gt_filename = f"dataset/lidar/pointcloud/{frame_id}.json"
+                # with open(gt_filename, 'w') as json_file:
+                    # json.dump(ground_truth_data, json_file, indent=4)
+
+                # np.save(f"dataset/lidar/pointcloud/{frame_id}.npy", point_cloud_tensor)
 
             self.marker_pub.publish(det3d_array)
         

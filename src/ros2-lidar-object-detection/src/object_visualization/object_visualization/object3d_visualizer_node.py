@@ -1,12 +1,13 @@
 import rclpy
 from rclpy.node import Node
-from object_detection_msgs.msg import Object3d, Object3dArray
+#from object_detection_msgs.msg import Object3d, Object3dArray
 from vision_msgs.msg import Detection3DArray
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.duration import Duration
 from geometry_msgs.msg import Point
 from tf_transformations import quaternion_matrix
 import numpy as np
+import time
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
@@ -43,9 +44,9 @@ class Object3dVisualizerNode(Node):
             marker = Marker()
             marker.header.frame_id = msg.header.frame_id
             marker.header.stamp = self.get_clock().now().to_msg()
-            marker.id = marker.header.stamp.nanosec  # Replace with a unique id if available
+            marker.id = marker.header.stamp.nanosec
             marker.type = 5
-            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].hypothesis.class_id)]
+            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].id)]
             marker.color.a = 1.0
             marker.scale.x = 0.1
             marker.lifetime = Duration(seconds=5.0).to_msg()
@@ -76,7 +77,7 @@ class Object3dVisualizerNode(Node):
                 pose.position.x, pose.position.y, pose.position.z
             ])
             
-            # Add lines to marker.points to create the bounding box
+            # Add lines to marker.points to create the bounding box]
             # Connect corners (0-1, 1-2, 2-3, 3-0) - bottom face
             for i in range(4):
                 src = Point(x=rotated_corners[i][0], y=rotated_corners[i][1], z=rotated_corners[i][2])
@@ -101,67 +102,65 @@ class Object3dVisualizerNode(Node):
             marker_array.markers.append(marker)
 
             # Create marker for score
-            score_marker = Marker()
-            score_marker.header.frame_id = msg.header.frame_id
-            score_marker.header.stamp = self.get_clock().now().to_msg()
-            score_marker.id = marker.header.stamp.nanosec + 1
-            score_marker.type = Marker.TEXT_VIEW_FACING
-            score_marker.color.r, score_marker.color.g, score_marker.color.b = [1.0, 1.0, 1.0]
-            score_marker.color.a = 1.0
-            score_marker.scale.z = 0.5
-            score_marker.lifetime = Duration(seconds=5.0).to_msg()
-            score_marker.ns = "object_visualization"
-
-            score_marker.pose.position = Point(x=pose.position.x, y=pose.position.y, z=pose.position.z + size.z / 2 + 0.5)
-            score_marker.pose.orientation.w = 1.0
+            # score_marker = Marker()
+            # score_marker.header.frame_id = msg.header.frame_id
+            # score_marker.header.stamp = self.get_clock().now().to_msg()
+            # score_marker.id = marker.header.stamp.nanosec + 1
+            # score_marker.type = Marker.TEXT_VIEW_FACING
+            # score_marker.color.r, score_marker.color.g, score_marker.color.b = [1.0, 1.0, 1.0]
+            # score_marker.color.a = 1.0
+            # score_marker.scale.z = 0.5
+            # score_marker.lifetime = Duration(seconds=5.0).to_msg()
+            # Add lines to marker.points to create the bounding box]
+            # score_marker.pose.orientation.w = 1.0
             
-            score = det3d.results[0].hypothesis.score
-            score_marker.text = f"{score:.2f}"
+            # score = det3d.results[0].hypothesis.score
+            # score_marker.text = f"{score:.2f}"
 
-            marker_array.markers.append(score_marker)
+            # marker_array.markers.append(score_marker)
         
         self.visualization_publisher.publish(marker_array)
 
 
-    def visual_objects3d(self, msg: Object3dArray):
+    # def visual_objects3d(self, msg: Object3dArray):
 
-        marker_array = MarkerArray()
-        for object in msg.objects:
+    #     marker_array = MarkerArray()
+    #     for object in msg.objects:
             
-            marker = Marker()
-            marker.header.frame_id = msg.header.frame_id
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.id = marker.header.stamp.nanosec
-            marker.type = 5
-            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[object.label]
-            marker.color.a = 1.0
-            marker.scale.x = 0.10
-            marker.lifetime = Duration(seconds=5.0).to_msg()
-            marker.ns = "object_visualization"
+    #         marker = Marker()
+    #         marker.header.frame_id = msg.header.frame_id
+    #         marker.header.stamp = self.get_clock().now().to_msg()
+    #         marker.id = marker.header.stamp.nanosec
+    #         marker.type = 5
+    #         marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[object.label]
+    #         marker.color.a = 1.0
+    #         marker.scale.x = 0.10
+    #         marker.lifetime = Duration(seconds=5.0).to_msg()
+    #         marker.ns = "object_visualization"
 
-            for i in range(4):
-                # this should do 0-1, 1-2, 2-3, 3-4
-                src = object.bounding_box.corners[i]
-                dst = object.bounding_box.corners[(i+1) % 4]
-                marker.points.append(src)
-                marker.points.append(dst)
+    #         for i in range(4):
+    #             # this should do 0-1, 1-2, 2-3, 3-4
+    #             src = object.bounding_box.corners[i]
+    #             dst = object.bounding_box.corners[(i+1) % 4]
+    #             marker.points.append(src)
+    #             marker.points.append(dst)
 
-                # this should do 4-5, 5-6, 6-7, 7-4
-                src = object.bounding_box.corners[i+4]
-                dst = object.bounding_box.corners[((i+1) % 4) + 4]
-                marker.points.append(src)
-                marker.points.append(dst)
+    #             # this should do 4-5, 5-6, 6-7, 7-4
+    #             src = object.bounding_box.corners[i+4]
+    #             dst = object.bounding_box.corners[((i+1) % 4) + 4]
+    #             marker.points.append(src)
+    #             marker.points.append(dst)
 
-                # this should do 0-4, 1-5, 2-6, 3-7
-                src = object.bounding_box.corners[i]
-                dst = object.bounding_box.corners[i+4]
-                marker.points.append(src)
-                marker.points.append(dst)
+    #             # this should do 0-4, 1-5, 2-6, 3-7
+    #             src = object.bounding_box.corners[i]
+    #             dst = object.bounding_box.corners[i+4]
+    #             marker.points.append(src)
+    #             marker.points.append(dst)
 
-            marker_array.markers.append(marker)
+    #         marker_array.markers.append(marker)
 
-        self.visualization_publisher.publish(marker_array)
-        self.get_logger().info("Published visualization")
+    #     self.visualization_publisher.publish(marker_array)
+    #     self.get_logger().info("Published visualization")
         
 
 

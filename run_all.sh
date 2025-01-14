@@ -5,7 +5,9 @@ source install/setup.bash
 
 trap "kill 0" EXIT
 
-# ros2 launch velodyne velodyne-all-nodes-VLP16-launch.py &
+ros2 launch velodyne velodyne-all-nodes-VLP16-launch.py &
+
+ros2 run cv_basics img_publisher &
 
 ros2 launch mmdet3d_ros2 mmdet3d_infer_launch.py &
 
