@@ -11,8 +11,8 @@ import time
 
 # label to color mappings, RGB
 LABEL_TO_COLOR = {
-    7: [1.0, 0.0, 0.0],     # Pedestrian
-    5: [0.0, 1.0, 0.0],     # Cyclist
+    8: [1.0, 0.0, 0.0],     # Pedestrian
+    6: [0.0, 1.0, 0.0],     # Cyclist
     0: [0.0, 0.0, 1.0]      # Car
 }
 
@@ -46,7 +46,7 @@ class Object3dVisualizerNode(Node):
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.id = marker.header.stamp.nanosec
             marker.type = 5
-            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].id)]
+            marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].hypothesis.class_id)]
             marker.color.a = 1.0
             marker.scale.x = 0.1
             marker.lifetime = Duration(seconds=5.0).to_msg()
