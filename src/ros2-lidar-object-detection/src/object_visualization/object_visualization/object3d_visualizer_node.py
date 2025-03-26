@@ -49,7 +49,7 @@ class Object3dVisualizerNode(Node):
             marker.color.r, marker.color.g, marker.color.b = LABEL_TO_COLOR[int(det3d.results[0].hypothesis.class_id)]
             marker.color.a = 1.0
             marker.scale.x = 0.1
-            marker.lifetime = Duration(seconds=5.0).to_msg()
+            marker.lifetime = Duration(seconds=0.3).to_msg()
             marker.ns = "object_visualization"
 
             # Extract pose and dimensions

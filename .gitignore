@@ -2,3 +2,5 @@ build/
 install/
 log/
 rosbag2_*/
+checkpoint.pt
+dair_nusc.pt

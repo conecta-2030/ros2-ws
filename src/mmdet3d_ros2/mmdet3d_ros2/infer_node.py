@@ -27,7 +27,7 @@ class InferNode(Node):
         self.point_cloud_frame = self.get_parameter('point_cloud_frame').get_parameter_value().string_value
         point_cloud_topic = self.get_parameter('point_cloud_topic').get_parameter_value().string_value
 
-        self.score_thrs = {0: 0.5, 6: 1, 8: 0.3}
+        self.score_thrs = {0: 0.5, 6: 1, 8: 0.25}
         self.nus_label_to_kitti = {
             0: 7,
             1: 5,
@@ -60,6 +60,7 @@ class InferNode(Node):
             10)
         
         self.marker_pub = self.create_publisher(Detection3DArray, 'detect_bbox3d', 10)
+        self.pointcloud_pub = self.create_publisher(PointCloud2, 'pc_data', 10)
 
         # self.filtered_bboxes_nms = torch.zeros(0, 6).cuda()
         # self.filtered_scores = torch.zeros(0).cuda()
@@ -108,8 +109,8 @@ class InferNode(Node):
         scores = model_result.pred_instances_3d.scores_3d
         labels = model_result.pred_instances_3d.labels_3d
 
-        bboxes = bboxes[scores > 0.3]
-        labels = labels[scores > 0.3]
+        bboxes = bboxes[scores > 0.1]
+        labels = labels[scores > 0.1]
         
         if bboxes.shape[0] != 0:
             
@@ -135,6 +136,25 @@ class InferNode(Node):
             # self.filtered_scores = self.filtered_scores[pick_ind]
             # self.filtered_bboxes_tensor = self.filtered_bboxes_tensor[pick_ind]
             # self.draw_bbox(self.filtered_bboxes_nms.tensor.cpu(), self.filtered_labels.cpu().numpy(), self.filtered_scores.cpu().numpy())
+
+        self.pointcloud_publish(msg)
+
+    def pointcloud_publish(self, msg):
+
+        new_point_cloud_msg = PointCloud2()
+        new_point_cloud_msg.header.stamp = msg.header.stamp
+        new_point_cloud_msg.header.frame_id = msg.header.frame_id
+
+        new_point_cloud_msg.height = msg.height
+        new_point_cloud_msg.width = msg.width
+        new_point_cloud_msg.is_dense = msg.is_dense
+        new_point_cloud_msg.is_bigendian = msg.is_bigendian
+        new_point_cloud_msg.fields = msg.fields
+        new_point_cloud_msg.point_step = msg.point_step
+        new_point_cloud_msg.row_step = msg.row_step
+        new_point_cloud_msg.data = msg.data
+
+        self.pointcloud_pub.publish(new_point_cloud_msg)
 
     def draw_bbox(self, bboxes, labels, scores, timestamp=None):
 
